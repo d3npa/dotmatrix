@@ -1,28 +1,46 @@
 #![no_std]
 #![no_main]
 
+use core::panic::PanicInfo;
+use core::str;
 use defmt_rtt as _;
 use embassy_executor::Spawner;
 use embassy_rp::gpio::{AnyPin, Level, Output};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use embassy_sync::blocking_mutex::ThreadModeMutex;
 use embassy_sync::mutex::Mutex;
 use embassy_time::{Duration, Ticker, Timer};
 
-mod graphics;
-use graphics::Graphic;
+use embassy_rp::bind_interrupts;
+use embassy_rp::peripherals::USB;
+use embassy_rp::usb::{Driver, Instance, InterruptHandler};
+use embassy_usb::class::cdc_acm::{CdcAcmClass, State};
+use embassy_usb::driver::EndpointError;
+use embassy_usb::Config;
 
-use core::panic::PanicInfo;
+use dotmatrix::graphics::{self, Graphic};
+use dotmatrix::Line;
+use dotmatrix::{Display, DotMatrixDisplayMutex};
 
 #[panic_handler]
 fn panic(_: &PanicInfo) -> ! {
     loop {}
 }
 
-static DISPLAY: MutexDisplay = MutexDisplay {
-    mutex: Mutex::new(None),
-};
-
 static DATA: Mutex<CriticalSectionRawMutex, Data> = Mutex::new(Data::new());
+
+static USB_DRIVER: Mutex<CriticalSectionRawMutex, Option<Driver<USB>>> =
+    Mutex::new(None);
+
+static LED: Mutex<CriticalSectionRawMutex, Option<Output<'static, AnyPin>>> =
+    Mutex::new(None);
+
+static DISPLAY: DotMatrixDisplayMutex = DotMatrixDisplayMutex::new();
+
+// used in setting up usb-serial
+bind_interrupts!(struct Irqs {
+    USBCTRL_IRQ => InterruptHandler<USB>;
+});
 
 struct Data {
     clock: Option<ClockData>,
@@ -81,158 +99,43 @@ impl Data {
     }
 }
 
-enum Line<'a> {
-    Anode(Output<'a, AnyPin>),
-    Cathode(Output<'a, AnyPin>),
-}
+// struct MutexDisplay<'a> {
+//     mutex: Mutex<CriticalSectionRawMutex, Option<Display<'a>>>,
+// }
 
-impl<'a> Line<'a> {
-    fn new_anode(pin: AnyPin) -> Self {
-        Self::Anode(Output::new(pin, Level::Low))
-    }
+// impl<'a> MutexDisplay<'a> {
+//     async fn render(&self) {
+//         if let Some(display) = self.mutex.lock().await.as_mut() {
+//             display.render().await;
+//         }
+//     }
 
-    fn new_cathode(pin: AnyPin) -> Self {
-        Self::Cathode(Output::new(pin, Level::High))
-    }
+//     async fn draw(&self, graphic: Graphic) {
+//         if let Some(display) = self.mutex.lock().await.as_mut() {
+//             display.draw(graphic);
+//         }
+//     }
 
-    fn enable(&mut self) {
-        match self {
-            Line::Anode(out) => out.set_high(),
-            Line::Cathode(out) => out.set_low(),
-        }
-    }
+//     async fn lock(&self) {
+//         while self.locked().await {
+//             Timer::after_millis(50).await;
+//         }
+//         if let Some(display) = self.mutex.lock().await.as_mut() {
+//             display.locked = true;
+//         }
+//     }
 
-    fn disable(&mut self) {
-        match self {
-            Line::Anode(out) => out.set_low(),
-            Line::Cathode(out) => out.set_high(),
-        }
-    }
-}
+//     async fn unlock(&self) {
+//         if let Some(display) = self.mutex.lock().await.as_mut() {
+//             display.locked = false;
+//         }
+//     }
 
-struct Display<'a> {
-    rows: [Line<'a>; 8],
-    cols: [Line<'a>; 8],
-    graphic: Graphic,
-    locked: bool,
-}
-
-impl<'a> Display<'a> {
-    async fn render(&mut self) {
-        for r in 0..self.rows.len() {
-            for c in 0..self.cols.len() {
-                if self.graphic[r][c] == 1 {
-                    self.rows[r].enable();
-                    self.cols[c].enable();
-                }
-            }
-            self.clear();
-        }
-    }
-
-    fn clear(&mut self) {
-        for r in &mut self.rows {
-            r.disable();
-        }
-        for c in &mut self.cols {
-            c.disable();
-        }
-    }
-
-    fn draw(&mut self, graphic: Graphic) {
-        self.graphic = graphic;
-    }
-}
-
-struct MutexDisplay<'a> {
-    mutex: Mutex<CriticalSectionRawMutex, Option<Display<'a>>>,
-}
-
-impl<'a> MutexDisplay<'a> {
-    async fn render(&self) {
-        if let Some(display) = self.mutex.lock().await.as_mut() {
-            display.render().await;
-        }
-    }
-
-    async fn draw(&self, graphic: Graphic) {
-        if let Some(display) = self.mutex.lock().await.as_mut() {
-            display.draw(graphic);
-        }
-    }
-
-    async fn lock(&self) {
-        while self.locked().await {
-            Timer::after_millis(50).await;
-        }
-        if let Some(display) = self.mutex.lock().await.as_mut() {
-            display.locked = true;
-        }
-    }
-
-    async fn unlock(&self) {
-        if let Some(display) = self.mutex.lock().await.as_mut() {
-            display.locked = false;
-        }
-    }
-
-    async fn locked(&self) -> bool {
-        if let Some(display) = self.mutex.lock().await.as_ref() {
-            display.locked
-        } else {
-            false
-        }
-    }
-}
-
-#[embassy_executor::task]
-async fn render_display() {
-    let mut ticker = Ticker::every(Duration::from_micros(100));
-    loop {
-        DISPLAY.render().await;
-        ticker.next().await;
-    }
-}
-
-// async fn panorama(message: &str, priority: bool) {
-//     let mut ticker = Ticker::every(Duration::from_millis(40));
-//     let width = 8; // width of one graphic
-
-//     for message in message
-//         .as_bytes()
-//         .chunks(graphics::MAX_LEN)
-//         .map(|chunk| str::from_utf8(chunk).unwrap_or("error"))
-//     {
-//         let panorama = graphics::from_str(message);
-//         let mut cursor = 0;
-
-//         while cursor < panorama.len * width {
-//             while (!priority) && DISPLAY.locked().await {
-//                 ticker.next().await;
-//             }
-
-//             let mut canvas = graphics::EMPTY;
-//             for r in 0..canvas.len() {
-//                 for c in 0..canvas.len() {
-//                     let canvas_c = c;
-//                     let panorama_c = c + cursor;
-//                     let frame_c = panorama_c % width;
-//                     let frame = {
-//                         let i = panorama_c / width;
-//                         if i < panorama.len {
-//                             &panorama.graphics[i]
-//                         } else {
-//                             &graphics::EMPTY
-//                         }
-//                     };
-
-//                     canvas[r][canvas_c] = frame[r][frame_c];
-//                 }
-//             }
-
-//             cursor += 1;
-//             DISPLAY.draw(canvas).await;
-//             ticker.next().await;
+//     async fn locked(&self) -> bool {
+//         if let Some(display) = self.mutex.lock().await.as_ref() {
+//             display.locked
+//         } else {
+//             false
 //         }
 //     }
 // }
@@ -250,7 +153,7 @@ async fn panorama2(message: &str, prio: bool) {
 
         // 8, bc i only care about the first char and pieces of the 2nd
         while cursor < 8 {
-            while (!prio) && DISPLAY.locked().await {
+            while (!prio) && DISPLAY.overridden().await {
                 ticker.next().await;
             }
 
@@ -278,18 +181,18 @@ async fn panorama2(message: &str, prio: bool) {
     }
 }
 
-async fn flash(panorama: graphics::Panorama, priority: bool) {
-    let mut ticker = Ticker::every(Duration::from_millis(100));
-    for i in 0..panorama.len {
-        while (!priority) && DISPLAY.locked().await {
-            ticker.next().await;
-        }
+// async fn flash(panorama: graphics::Panorama, priority: bool) {
+//     let mut ticker = Ticker::every(Duration::from_millis(100));
+//     for i in 0..panorama.len {
+//         while (!priority) && DISPLAY.locked().await {
+//             ticker.next().await;
+//         }
 
-        let graphic = panorama.graphics[i];
-        DISPLAY.draw(*graphic).await;
-        ticker.next().await;
-    }
-}
+//         let graphic = panorama.graphics[i];
+//         DISPLAY.draw(*graphic).await;
+//         ticker.next().await;
+//     }
+// }
 
 async fn pulse() {
     let mut ticker = Ticker::every(Duration::from_millis(20));
@@ -340,6 +243,7 @@ async fn weather() {
 
 #[embassy_executor::task]
 async fn animate() {
+    let mut ticker = Ticker::every(Duration::from_micros(100));
     loop {
         panorama2(" AKIHABARA ", false).await;
         pulse().await;
@@ -347,52 +251,100 @@ async fn animate() {
         pulse().await;
         weather().await;
         pulse().await;
-        // {
-        // }
-
-        // let frame_i = panorama_cursor / width;
-        // let frame = &panorama[frame_i];
-
-        // for r in 0..prev.len() {
-        //     for c in 0..prev.len() {
-        //         if c > 0 {
-        //             // first row disappears...
-        //             canvas[r][c - 1] = prev[r][c];
-        //         }
-        //     }
-        //     let width = canvas[r].len();
-        //     let frame = col_cursor % width;
-        //     let col = col_cursor % width;
-        //     canvas[r][canvas[r].len() - 1] = panorama[frame][col];
-        // }
+        ticker.next().await;
     }
 }
 
-use embassy_rp::bind_interrupts;
-use embassy_rp::peripherals::USB;
-use embassy_rp::usb::{Driver, Instance, InterruptHandler};
-use embassy_usb::class::cdc_acm::{CdcAcmClass, State};
-use embassy_usb::driver::EndpointError;
-use embassy_usb::Config;
+#[embassy_executor::task]
+async fn render_display() {
+    let mut ticker = Ticker::every(Duration::from_micros(100));
+    loop {
+        DISPLAY.render().await;
+        ticker.next().await;
+    }
+}
 
-// struct UsbSerial<'a> {
-//     class: Option<CdcAcmClass<'a, Driver<'a, USB>>>,
-// }
+async fn handle_commands<'d, T: Instance + 'd>(
+    class: &mut CdcAcmClass<'d, Driver<'d, T>>,
+) -> Result<(), EndpointError> {
+    let mut buf = [0; 64];
+    loop {
+        let n = class.read_packet(&mut buf).await?;
+        let data = &buf[..n];
+        // find null
+        let mut null_i = n;
+        for i in 0..n {
+            if data[i] == 0 {
+                null_i = i;
+            }
+        }
+        // string
+        let string = match str::from_utf8(&data[..null_i]) {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
 
-// static USB: Mutex<CriticalSectionRawMutex, UsbSerial> =
-//     Mutex::new(UsbSerial { class: None });
+        let (c, a) = string.split_at(1);
+        match c {
+            "0" => {
+                //echo message
+                let mut alert: [&Graphic; 8] = [&graphics::EMPTY; 8];
+                alert[1] = &graphics::FULL;
+                alert[3] = &graphics::FULL;
+                alert[5] = &graphics::FULL;
+                alert[7] = &graphics::FULL;
+                let panorama = graphics::Panorama {
+                    graphics: alert,
+                    len: 8,
+                };
+                // if let Some(display) = DISPLAY.mutex.lock().await.as_mut() {
+                // display.locked = true;
+                // display.flash(panorama, true).await;
+                // }
+                DISPLAY.set_override(true).await;
+                DISPLAY.flash(panorama, true).await;
+                panorama2(a, true).await;
+                DISPLAY.set_override(false).await;
+                // if let Some(display) = DISPLAY.mutex.lock().await.as_mut() {
+                // display.locked = false;
+                // }
+                // DISPLAY.lock().await;
+                // flash(
+                //     graphics::Panorama {
+                //         graphics: alert,
+                //         len: 8,
+                //     },
+                //     true,
+                // )
+                // .await;
 
-// static PERIPHERALS: Mutex<CriticalSectionRawMutex, Option<Peripherals>> =
-// Mutex::new(None);
-
-// static CLASS: Option<CdcAcmClass<'static, Driver<USB>>> = None;
-// #[embassy_executor::task]
-// async fn handle_serial() {}
-
-static USB_DRIVER: Mutex<CriticalSectionRawMutex, Option<Driver<USB>>> =
-    Mutex::new(None);
-// static USB_CONFIG: Option<Config> = None;
-// static USB_DEVICE: Option<UsbDevice<Driver<USB>>> = None;
+                // DISPLAY.unlock().await;
+            }
+            "1" => {
+                //store clock
+                let clock_data = match ClockData::try_from(a.as_bytes()) {
+                    Ok(v) => v,
+                    Err(_) => {
+                        let _ = class.write_packet(b"ERROR").await;
+                        continue;
+                    }
+                };
+                let mut data = DATA.lock().await;
+                data.clock = Some(clock_data);
+            }
+            "2" => {
+                //store weather
+                let weather_data = match WeatherData::try_from(a.as_bytes()) {
+                    Ok(v) => v,
+                    Err(_) => continue,
+                };
+                let mut data = DATA.lock().await;
+                data.weather = Some(weather_data);
+            }
+            _ => {}
+        }
+    }
+}
 
 #[embassy_executor::task]
 async fn setup_serial() {
@@ -444,123 +396,6 @@ async fn setup_serial() {
     embassy_futures::join::join(usb_fut, serial_loop).await;
 }
 
-use core::str;
-
-async fn handle_commands<'d, T: Instance + 'd>(
-    class: &mut CdcAcmClass<'d, Driver<'d, T>>,
-) -> Result<(), EndpointError> {
-    let mut buf = [0; 64];
-    loop {
-        let n = class.read_packet(&mut buf).await?;
-        let data = &buf[..n];
-        // find null
-        let mut null_i = n;
-        for i in 0..n {
-            if data[i] == 0 {
-                null_i = i;
-            }
-        }
-        // string
-        let string = match str::from_utf8(&data[..null_i]) {
-            Ok(s) => s,
-            Err(_) => continue,
-        };
-
-        let (c, a) = string.split_at(1);
-        match c {
-            "0" => {
-                //echo message
-                let mut alert: [&Graphic; 8] = [&graphics::EMPTY; 8];
-                alert[1] = &graphics::FULL;
-                alert[3] = &graphics::FULL;
-                alert[5] = &graphics::FULL;
-                alert[7] = &graphics::FULL;
-                DISPLAY.lock().await;
-                flash(
-                    graphics::Panorama {
-                        graphics: alert,
-                        len: 8,
-                    },
-                    true,
-                )
-                .await;
-
-                panorama2(a, true).await;
-                DISPLAY.unlock().await;
-            }
-            "1" => {
-                //store clock
-                let clock_data = match ClockData::try_from(a.as_bytes()) {
-                    Ok(v) => v,
-                    Err(_) => {
-                        let _ = class.write_packet(b"ERROR").await;
-                        continue;
-                    }
-                };
-                let mut data = DATA.lock().await;
-                data.clock = Some(clock_data);
-            }
-            "2" => {
-                //store weather
-                let weather_data = match WeatherData::try_from(a.as_bytes()) {
-                    Ok(v) => v,
-                    Err(_) => continue,
-                };
-                let mut data = DATA.lock().await;
-                data.weather = Some(weather_data);
-            }
-            _ => {}
-        }
-        // let data = &buf[..n];
-        // class.write_packet(data).await?;
-        // if n == 0 {
-        //     continue;
-        // }
-
-        // let command = &data[0];
-        // match command {
-        //     0x31 => {
-        //         // display string
-        //         if n > 1 {
-        //             let l = min(n, 16);
-        //             let args = &data[1..l];
-        //             let mut null_i = 0;
-        //             for i in 1..l {
-        //                 if args[i] == 0 {
-        //                     null_i = i;
-        //                 }
-        //             }
-        //             let string = &args[0..null_i];
-        //             let string = match str::from_utf8(string) {
-        //                 Ok(s) => s,
-        //                 Err(_) => continue,
-        //             };
-        //             // panorama(string).await;
-        //         }
-        //         // let len = {
-        //         //     if n < 16 {
-        //         //         16
-        //         //     } else {
-        //         //         n
-        //         //     }
-        //         // };
-        //         // let _string = match str::from_utf8(&data[1..len]) {
-        //         //     Ok(s) => s,
-        //         //     Err(_) => continue,
-        //         // };
-        //         // panorama(string).await;
-        //     }
-        //     _ => {}
-        // }
-    }
-}
-// setup USB serial
-bind_interrupts!(struct Irqs {
-    USBCTRL_IRQ => InterruptHandler<USB>;
-});
-
-static LED: Mutex<CriticalSectionRawMutex, Option<Output<'static, AnyPin>>> =
-    Mutex::new(None);
 #[embassy_executor::task]
 async fn blink() {
     loop {
@@ -602,9 +437,9 @@ async fn main(spawner: Spawner) {
                 Line::new_cathode(AnyPin::from(p.PIN_16)),
             ],
             graphic: graphics::EMPTY,
-            locked: false,
+            overridden: false,
         };
-        *(DISPLAY.mutex.lock().await) = Some(display);
+        *(DISPLAY.0.lock().await) = Some(display);
     }
 
     {
