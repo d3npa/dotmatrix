@@ -20,6 +20,7 @@ use embassy_usb::Config;
 use dotmatrix::graphics::{self, Graphic};
 use dotmatrix::Line;
 use dotmatrix::{Display, DotMatrixDisplayMutex};
+use dotmatrix::{GpioOutput, ShiftRegisterOutput};
 
 #[panic_handler]
 fn panic(_: &PanicInfo) -> ! {
@@ -34,7 +35,8 @@ static USB_DRIVER: Mutex<CriticalSectionRawMutex, Option<Driver<USB>>> =
 static LED: Mutex<CriticalSectionRawMutex, Option<Output<'static, AnyPin>>> =
     Mutex::new(None);
 
-static DISPLAY: DotMatrixDisplayMutex = DotMatrixDisplayMutex::new();
+static DISPLAY: DotMatrixDisplayMutex<ShiftRegisterOutput> =
+    DotMatrixDisplayMutex::new();
 
 // used in setting up usb-serial
 bind_interrupts!(struct Irqs {
@@ -266,26 +268,35 @@ async fn main(spawner: Spawner) {
 
     {
         let display = Display {
-            rows: [
-                Line::new_anode(AnyPin::from(p.PIN_9)),
-                Line::new_anode(AnyPin::from(p.PIN_14)),
-                Line::new_anode(AnyPin::from(p.PIN_8)),
-                Line::new_anode(AnyPin::from(p.PIN_12)),
-                Line::new_anode(AnyPin::from(p.PIN_1)),
-                Line::new_anode(AnyPin::from(p.PIN_7)),
-                Line::new_anode(AnyPin::from(p.PIN_2)),
-                Line::new_anode(AnyPin::from(p.PIN_5)),
-            ],
-            cols: [
-                Line::new_cathode(AnyPin::from(p.PIN_13)),
-                Line::new_cathode(AnyPin::from(p.PIN_3)),
-                Line::new_cathode(AnyPin::from(p.PIN_4)),
-                Line::new_cathode(AnyPin::from(p.PIN_10)),
-                Line::new_cathode(AnyPin::from(p.PIN_6)),
-                Line::new_cathode(AnyPin::from(p.PIN_11)),
-                Line::new_cathode(AnyPin::from(p.PIN_15)),
-                Line::new_cathode(AnyPin::from(p.PIN_16)),
-            ],
+            // output_driver: GpioOutput {
+            //     rows: [
+            //         Line::new_anode(AnyPin::from(p.PIN_9)),
+            //         Line::new_anode(AnyPin::from(p.PIN_14)),
+            //         Line::new_anode(AnyPin::from(p.PIN_8)),
+            //         Line::new_anode(AnyPin::from(p.PIN_12)),
+            //         Line::new_anode(AnyPin::from(p.PIN_1)),
+            //         Line::new_anode(AnyPin::from(p.PIN_7)),
+            //         Line::new_anode(AnyPin::from(p.PIN_2)),
+            //         Line::new_anode(AnyPin::from(p.PIN_5)),
+            //     ],
+            //     cols: [
+            //         Line::new_cathode(AnyPin::from(p.PIN_13)),
+            //         Line::new_cathode(AnyPin::from(p.PIN_3)),
+            //         Line::new_cathode(AnyPin::from(p.PIN_4)),
+            //         Line::new_cathode(AnyPin::from(p.PIN_10)),
+            //         Line::new_cathode(AnyPin::from(p.PIN_6)),
+            //         Line::new_cathode(AnyPin::from(p.PIN_11)),
+            //         Line::new_cathode(AnyPin::from(p.PIN_15)),
+            //         Line::new_cathode(AnyPin::from(p.PIN_16)),
+            //     ],
+            // },
+            output_driver: ShiftRegisterOutput {
+                ser: Line::new_anode(AnyPin::from(p.PIN_21)),
+                oe: Line::new_cathode(AnyPin::from(p.PIN_22)), // 未使用
+                rclk: Line::new_anode(AnyPin::from(p.PIN_20)),
+                srclk: Line::new_anode(AnyPin::from(p.PIN_19)),
+                srclr: Line::new_cathode(AnyPin::from(p.PIN_18)),
+            },
             graphic: graphics::EMPTY,
             overridden: false,
         };
@@ -293,7 +304,7 @@ async fn main(spawner: Spawner) {
     }
 
     {
-        let led = Output::new(AnyPin::from(p.PIN_25), Level::Low);
+        let led = Output::new(AnyPin::from(p.PIN_14), Level::Low);
         *(LED.lock().await) = Some(led);
     }
 

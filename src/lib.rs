@@ -38,21 +38,21 @@ impl<'a> Line<'a> {
     }
 }
 
-/// represents a single 8x8 dot-matrix led display
-pub struct DotMatrixDisplay<'a> {
-    pub rows: [Line<'a>; 8],
-    pub cols: [Line<'a>; 8],
-    pub graphic: Graphic,
-    pub overridden: bool,
+pub trait DotMatrixOutput {
+    fn output(&mut self, g: Graphic);
+    fn clear(&mut self);
 }
 
-pub type Display<'a> = DotMatrixDisplay<'a>;
+pub struct GpioOutput<'a> {
+    pub rows: [Line<'a>; 8],
+    pub cols: [Line<'a>; 8],
+}
 
-impl<'a> DotMatrixDisplay<'a> {
-    pub async fn render(&mut self) {
+impl<'a> DotMatrixOutput for GpioOutput<'a> {
+    fn output(&mut self, g: Graphic) {
         for r in 0..self.rows.len() {
             for c in 0..self.cols.len() {
-                if self.graphic[r][c] == 1 {
+                if g[r][c] == 1 {
                     self.rows[r].enable();
                     self.cols[c].enable();
                 }
@@ -61,13 +61,100 @@ impl<'a> DotMatrixDisplay<'a> {
         }
     }
 
-    pub fn clear(&mut self) {
+    fn clear(&mut self) {
         for r in &mut self.rows {
             r.disable();
         }
         for c in &mut self.cols {
             c.disable();
         }
+    }
+}
+
+pub struct ShiftRegisterOutput<'a> {
+    pub ser: Line<'a>,
+    pub oe: Line<'a>,
+    pub rclk: Line<'a>,
+    pub srclk: Line<'a>,
+    pub srclr: Line<'a>,
+}
+
+impl<'a> ShiftRegisterOutput<'a> {
+    // 1s represent disabled columns (cathodes)
+    const EMPTY_SIGNAL: u16 = 0b1101011000101100;
+    fn tick(&mut self) {
+        self.srclk.enable();
+        self.srclk.disable();
+    }
+
+    fn latch(&mut self) {
+        self.rclk.enable();
+        self.rclk.disable();
+    }
+
+    fn clear(&mut self) {
+        self.write_short(Self::EMPTY_SIGNAL);
+    }
+
+    fn write_short(&mut self, data: u16) {
+        for bit in (0..16).map(|i| data & (1 << i) != 0) {
+            if bit == true {
+                self.ser.enable();
+            } else {
+                self.ser.disable();
+            }
+            self.tick();
+        }
+        self.latch();
+    }
+}
+
+impl<'a> DotMatrixOutput for ShiftRegisterOutput<'a> {
+    fn output(&mut self, g: Graphic) {
+        let row_map = [9, 14, 8, 12, 1, 7, 2, 5];
+        let col_map = [13, 3, 4, 10, 6, 11, 15, 16];
+        for r in 0..g.len() {
+            let mut signal = Self::EMPTY_SIGNAL;
+            for c in 0..g[r].len() {
+                if g[r][c] == 1 {
+                    signal |= 1 << (row_map[r] - 1);
+                    signal &= !(1u16 << (col_map[c] - 1));
+                }
+            }
+            self.write_short(signal);
+        }
+        self.clear();
+    }
+
+    fn clear(&mut self) {
+        ShiftRegisterOutput::clear(self);
+    }
+}
+
+/// represents a single 8x8 dot-matrix led display
+pub struct DotMatrixDisplay<O>
+where
+    O: DotMatrixOutput,
+{
+    pub output_driver: O,
+    pub graphic: Graphic,
+    pub overridden: bool,
+}
+
+// pub type Display<'a> = DotMatrixDisplay<'a>;
+pub type Display<O> = DotMatrixDisplay<O>;
+
+// impl<'a> DotMatrixDisplay<'a> {
+impl<O> DotMatrixDisplay<O>
+where
+    O: DotMatrixOutput,
+{
+    pub async fn render(&mut self) {
+        self.output_driver.output(self.graphic);
+    }
+
+    pub fn clear(&mut self) {
+        self.output_driver.clear();
     }
 
     /// TODO: deprecate. setting graphic directly is fine.
@@ -95,11 +182,14 @@ impl<'a> DotMatrixDisplay<'a> {
 
 /// TODO: better research types of mutexes
 /// TODO: must there really be a single static Display, needing Option?
-pub struct DotMatrixDisplayMutex<'a>(
-    pub Mutex<CriticalSectionRawMutex, Option<DotMatrixDisplay<'a>>>,
+pub struct DotMatrixDisplayMutex<O: DotMatrixOutput>(
+    pub Mutex<CriticalSectionRawMutex, Option<DotMatrixDisplay<O>>>,
 );
 
-impl<'a> DotMatrixDisplayMutex<'a> {
+impl<O> DotMatrixDisplayMutex<O>
+where
+    O: DotMatrixOutput,
+{
     const FLASH_DURATION: Duration = Duration::from_millis(100);
     const OVERRIDE_CHECK_INTERVAL: Duration = Duration::from_micros(100);
 
