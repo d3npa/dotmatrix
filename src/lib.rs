@@ -4,7 +4,7 @@ use embassy_rp::gpio::{AnyPin, Level, Output};
 use embassy_sync::{
     blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex,
 };
-use embassy_time::{Duration, Ticker, Timer};
+use embassy_time::{Duration, Ticker};
 
 pub mod graphics;
 use graphics::Graphic;
@@ -166,6 +166,78 @@ impl<'a> DotMatrixDisplayMutex<'a> {
             let graphic = panorama.graphics[i];
             self.draw(*graphic).await;
             ticker.next().await;
+        }
+    }
+
+    pub async fn pulse(&self) {
+        let mut ticker = Ticker::every(Duration::from_millis(20));
+        let mut counter: usize = 0;
+        let mut iters = 0;
+
+        loop {
+            while self.locked().await {
+                ticker.next().await;
+            }
+            // moving diagonal stripe
+            let mut canvas = graphics::EMPTY;
+            for r in 0..canvas.len() {
+                let n = counter - r;
+                if n < canvas[r].len() {
+                    canvas[r][n] = 1;
+                }
+            }
+
+            counter += 1;
+            counter %= 16;
+            self.draw(canvas).await;
+            ticker.next().await;
+            if counter == 0 {
+                iters += 1;
+            }
+            if iters == 2 {
+                break;
+            }
+        }
+    }
+
+    pub async fn panorama2(&self, message: &str, prio: bool) {
+        // let panorama_cols = message.len() * 8;
+        let mut ticker = Ticker::every(Duration::from_millis(40));
+
+        for pair in message.chars().zip(message.chars().skip(1)) {
+            let mut cursor = 0;
+            let (a, b) = {
+                let (a, b) = pair;
+                (graphics::from_char(a), graphics::from_char(b))
+            };
+
+            // 8, bc i only care about the first char and pieces of the 2nd
+            while cursor < 8 {
+                while (!prio) && self.overridden().await {
+                    ticker.next().await;
+                }
+
+                let mut canvas = graphics::EMPTY;
+                for r in 0..canvas.len() {
+                    for canvas_c in 0..canvas[r].len() {
+                        let panorama_c = canvas_c + cursor;
+                        let frame_c = panorama_c % 8;
+                        let frame = {
+                            // a or b?
+                            if panorama_c < 8 {
+                                a
+                            } else {
+                                b
+                            }
+                        };
+                        canvas[r][canvas_c] = frame[r][frame_c];
+                    }
+                }
+
+                cursor += 1;
+                self.draw(canvas).await;
+                ticker.next().await;
+            }
         }
     }
 }

@@ -7,7 +7,6 @@ use defmt_rtt as _;
 use embassy_executor::Spawner;
 use embassy_rp::gpio::{AnyPin, Level, Output};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
-use embassy_sync::blocking_mutex::ThreadModeMutex;
 use embassy_sync::mutex::Mutex;
 use embassy_time::{Duration, Ticker, Timer};
 
@@ -99,145 +98,19 @@ impl Data {
     }
 }
 
-// struct MutexDisplay<'a> {
-//     mutex: Mutex<CriticalSectionRawMutex, Option<Display<'a>>>,
-// }
-
-// impl<'a> MutexDisplay<'a> {
-//     async fn render(&self) {
-//         if let Some(display) = self.mutex.lock().await.as_mut() {
-//             display.render().await;
-//         }
-//     }
-
-//     async fn draw(&self, graphic: Graphic) {
-//         if let Some(display) = self.mutex.lock().await.as_mut() {
-//             display.draw(graphic);
-//         }
-//     }
-
-//     async fn lock(&self) {
-//         while self.locked().await {
-//             Timer::after_millis(50).await;
-//         }
-//         if let Some(display) = self.mutex.lock().await.as_mut() {
-//             display.locked = true;
-//         }
-//     }
-
-//     async fn unlock(&self) {
-//         if let Some(display) = self.mutex.lock().await.as_mut() {
-//             display.locked = false;
-//         }
-//     }
-
-//     async fn locked(&self) -> bool {
-//         if let Some(display) = self.mutex.lock().await.as_ref() {
-//             display.locked
-//         } else {
-//             false
-//         }
-//     }
-// }
-
-async fn panorama2(message: &str, prio: bool) {
-    // let panorama_cols = message.len() * 8;
-    let mut ticker = Ticker::every(Duration::from_millis(40));
-
-    for pair in message.chars().zip(message.chars().skip(1)) {
-        let mut cursor = 0;
-        let (a, b) = {
-            let (a, b) = pair;
-            (graphics::from_char(a), graphics::from_char(b))
-        };
-
-        // 8, bc i only care about the first char and pieces of the 2nd
-        while cursor < 8 {
-            while (!prio) && DISPLAY.overridden().await {
-                ticker.next().await;
-            }
-
-            let mut canvas = graphics::EMPTY;
-            for r in 0..canvas.len() {
-                for canvas_c in 0..canvas[r].len() {
-                    let panorama_c = canvas_c + cursor;
-                    let frame_c = panorama_c % 8;
-                    let frame = {
-                        // a or b?
-                        if panorama_c < 8 {
-                            a
-                        } else {
-                            b
-                        }
-                    };
-                    canvas[r][canvas_c] = frame[r][frame_c];
-                }
-            }
-
-            cursor += 1;
-            DISPLAY.draw(canvas).await;
-            ticker.next().await;
-        }
-    }
-}
-
-// async fn flash(panorama: graphics::Panorama, priority: bool) {
-//     let mut ticker = Ticker::every(Duration::from_millis(100));
-//     for i in 0..panorama.len {
-//         while (!priority) && DISPLAY.locked().await {
-//             ticker.next().await;
-//         }
-
-//         let graphic = panorama.graphics[i];
-//         DISPLAY.draw(*graphic).await;
-//         ticker.next().await;
-//     }
-// }
-
-async fn pulse() {
-    let mut ticker = Ticker::every(Duration::from_millis(20));
-    let mut counter: usize = 0;
-    let mut iters = 0;
-
-    loop {
-        while DISPLAY.locked().await {
-            ticker.next().await;
-        }
-        // moving diagonal stripe
-        let mut canvas = graphics::EMPTY;
-        for r in 0..canvas.len() {
-            let n = counter - r;
-            if n < canvas[r].len() {
-                canvas[r][n] = 1;
-            }
-        }
-
-        counter += 1;
-        counter %= 16;
-        DISPLAY.draw(canvas).await;
-        ticker.next().await;
-        if counter == 0 {
-            iters += 1;
-        }
-        if iters == 2 {
-            break;
-        }
-    }
-}
-
 async fn clock() {
     if let Some(clock) = DATA.lock().await.clock {
         let string = str::from_utf8(&clock.0[..]).unwrap();
-        panorama2(" time: ", false).await;
-        panorama2(string, false).await;
+        // panorama2("  ", false).await;
+        DISPLAY.panorama2(string, false).await;
     }
 }
 
 async fn weather() {
     if let Some(weather) = DATA.lock().await.weather {
         let string = str::from_utf8(&weather.0[..]).unwrap();
-        panorama2(" weather: ", false).await;
-        panorama2(string, false).await;
+        // panorama2("  ", false).await;
+        DISPLAY.panorama2(string, false).await;
     }
 }
 
@@ -245,12 +118,12 @@ async fn weather() {
 async fn animate() {
     let mut ticker = Ticker::every(Duration::from_micros(100));
     loop {
-        panorama2(" AKIHABARA ", false).await;
-        pulse().await;
+        DISPLAY.panorama2(" AKIHABARA ", false).await;
+        DISPLAY.pulse().await;
         clock().await;
-        pulse().await;
+        DISPLAY.pulse().await;
         weather().await;
-        pulse().await;
+        DISPLAY.pulse().await;
         ticker.next().await;
     }
 }
@@ -297,28 +170,10 @@ async fn handle_commands<'d, T: Instance + 'd>(
                     graphics: alert,
                     len: 8,
                 };
-                // if let Some(display) = DISPLAY.mutex.lock().await.as_mut() {
-                // display.locked = true;
-                // display.flash(panorama, true).await;
-                // }
                 DISPLAY.set_override(true).await;
                 DISPLAY.flash(panorama, true).await;
-                panorama2(a, true).await;
+                DISPLAY.panorama2(a, true).await;
                 DISPLAY.set_override(false).await;
-                // if let Some(display) = DISPLAY.mutex.lock().await.as_mut() {
-                // display.locked = false;
-                // }
-                // DISPLAY.lock().await;
-                // flash(
-                //     graphics::Panorama {
-                //         graphics: alert,
-                //         len: 8,
-                //     },
-                //     true,
-                // )
-                // .await;
-
-                // DISPLAY.unlock().await;
             }
             "1" => {
                 //store clock
@@ -380,11 +235,7 @@ async fn setup_serial() {
     let mut class = CdcAcmClass::new(&mut builder, &mut state, 64);
     let mut usb = builder.build();
 
-    // let run_usb = async {
     let usb_fut = usb.run();
-    // };
-
-    // run_usb.await;
 
     let serial_loop = async {
         loop {
@@ -412,7 +263,6 @@ async fn blink() {
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
     let p = embassy_rp::init(Default::default());
-    // *PERIPHERALS.lock().await = Some(p);
 
     {
         let display = Display {
