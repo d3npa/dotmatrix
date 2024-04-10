@@ -1,6 +1,7 @@
 #![no_std]
 #![no_main]
 
+use core::cmp::min;
 use core::panic::PanicInfo;
 use core::str;
 use defmt_rtt as _;
@@ -43,51 +44,18 @@ bind_interrupts!(struct Irqs {
     USBCTRL_IRQ => InterruptHandler<USB>;
 });
 
-struct Data {
-    clock: Option<ClockData>,
-    weather: Option<WeatherData>,
-}
-
 #[derive(Debug)]
 enum Error {
     Utf8,
-    DataLength,
+    // DataLength,
 }
 
-#[derive(Copy, Clone)]
-struct ClockData([u8; 7]);
-impl ClockData {
-    fn try_from(bytes: &[u8]) -> Result<Self, Error> {
-        if bytes.len() != 7 {
-            return Err(Error::DataLength);
-        }
-        let mut clock_data = [0u8; 7];
-        for i in 0..clock_data.len() {
-            clock_data[i] = bytes[i];
-        }
-        match str::from_utf8(&clock_data[..]) {
-            Ok(_) => Ok(Self(clock_data)),
-            Err(_) => Err(Error::Utf8),
-        }
-    }
-}
+type ClockString = [u8; 7];
+type WeatherString = [u8; 5];
 
-#[derive(Copy, Clone)]
-struct WeatherData([u8; 5]);
-impl WeatherData {
-    fn try_from(bytes: &[u8]) -> Result<Self, Error> {
-        if bytes.len() != 5 {
-            return Err(Error::DataLength);
-        }
-        let mut data = [0u8; 5];
-        for i in 0..data.len() {
-            data[i] = bytes[i];
-        }
-        match str::from_utf8(&data[..]) {
-            Ok(_) => Ok(Self(data)),
-            Err(_) => Err(Error::Utf8),
-        }
-    }
+struct Data {
+    clock: Option<ClockString>,
+    weather: Option<WeatherString>,
 }
 
 impl Data {
@@ -100,9 +68,23 @@ impl Data {
     }
 }
 
+fn copy_str_bytes<const LEN: usize>(buf: &[u8]) -> Result<[u8; LEN], Error> {
+    if let Err(_) = str::from_utf8(buf) {
+        return Err(Error::Utf8);
+    }
+
+    let mut out = [0u8; LEN];
+    let copy_len = min(buf.len(), out.len());
+    for i in 0..copy_len {
+        out[i] = buf[i];
+    }
+
+    Ok(out)
+}
+
 async fn clock() {
     if let Some(clock) = DATA.lock().await.clock {
-        let string = str::from_utf8(&clock.0[..]).unwrap();
+        let string = str::from_utf8(&clock[..]).unwrap();
         // panorama2("  ", false).await;
         DISPLAY.panorama2(string, false).await;
     }
@@ -110,7 +92,7 @@ async fn clock() {
 
 async fn weather() {
     if let Some(weather) = DATA.lock().await.weather {
-        let string = str::from_utf8(&weather.0[..]).unwrap();
+        let string = str::from_utf8(&weather[..]).unwrap();
         // panorama2("  ", false).await;
         DISPLAY.panorama2(string, false).await;
     }
@@ -179,7 +161,7 @@ async fn handle_commands<'d, T: Instance + 'd>(
             }
             "1" => {
                 //store clock
-                let clock_data = match ClockData::try_from(a.as_bytes()) {
+                let clock_data = match copy_str_bytes(a.as_bytes()) {
                     Ok(v) => v,
                     Err(_) => {
                         let _ = class.write_packet(b"ERROR").await;
@@ -191,7 +173,7 @@ async fn handle_commands<'d, T: Instance + 'd>(
             }
             "2" => {
                 //store weather
-                let weather_data = match WeatherData::try_from(a.as_bytes()) {
+                let weather_data = match copy_str_bytes(a.as_bytes()) {
                     Ok(v) => v,
                     Err(_) => continue,
                 };
