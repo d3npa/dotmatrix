@@ -291,17 +291,20 @@ async fn main(spawner: Spawner) {
             //     ],
             // },
             output_driver: ShiftRegisterOutput {
-                ser: Line::new_anode(AnyPin::from(p.PIN_21)),
-                oe: Line::new_cathode(AnyPin::from(p.PIN_22)), // 未使用
-                rclk: Line::new_anode(AnyPin::from(p.PIN_20)),
-                srclk: Line::new_anode(AnyPin::from(p.PIN_19)),
-                srclr: Line::new_cathode(AnyPin::from(p.PIN_18)),
+                ser: Line::new_anode(AnyPin::from(p.PIN_2)),
+                oe: Line::new_cathode(AnyPin::from(p.PIN_22)), // 適当値;未使用
+                rclk: Line::new_anode(AnyPin::from(p.PIN_3)),
+                srclk: Line::new_anode(AnyPin::from(p.PIN_4)),
+                srclr: Line::new_cathode(AnyPin::from(p.PIN_5)),
             },
             graphic: graphics::EMPTY,
             overridden: false,
         };
         *(DISPLAY.0.lock().await) = Some(display);
     }
+
+    let mut power = Output::new(p.PIN_1, Level::Low);
+    power.set_high();
 
     {
         let led = Output::new(AnyPin::from(p.PIN_14), Level::Low);
