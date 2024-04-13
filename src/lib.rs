@@ -1,5 +1,7 @@
 #![no_std]
 
+use core::ops::Deref;
+
 use embassy_rp::gpio::{AnyPin, Level, Output};
 use embassy_sync::{
     blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex,
@@ -329,5 +331,32 @@ where
                 ticker.next().await;
             }
         }
+    }
+}
+
+pub struct Displays<O: DotMatrixOutput>([DotMatrixDisplayMutex<O>; 2]);
+
+impl<O: DotMatrixOutput> Deref for Displays<O> {
+    type Target = [DotMatrixDisplayMutex<O>; 2];
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<O: DotMatrixOutput> Displays<O> {
+    pub const fn new() -> Self {
+        Self([DotMatrixDisplayMutex::new(), DotMatrixDisplayMutex::new()])
+    }
+
+    pub async fn panorama(&self, message: &str, prio: bool) {
+        let d0 = async {
+            self[0].panorama2(&message, prio).await;
+        };
+
+        let d1 = async {
+            self[1].panorama2(&message[1..], prio).await;
+        };
+
+        embassy_futures::join::join(d0, d1).await;
     }
 }

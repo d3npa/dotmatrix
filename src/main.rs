@@ -19,9 +19,9 @@ use embassy_usb::driver::EndpointError;
 use embassy_usb::Config;
 
 use dotmatrix::graphics::{self, Graphic};
-use dotmatrix::Line;
+use dotmatrix::ShiftRegisterOutput;
 use dotmatrix::{Display, DotMatrixDisplayMutex};
-use dotmatrix::{GpioOutput, ShiftRegisterOutput};
+use dotmatrix::{Displays, Line};
 
 #[panic_handler]
 fn panic(_: &PanicInfo) -> ! {
@@ -36,8 +36,10 @@ static USB_DRIVER: Mutex<CriticalSectionRawMutex, Option<Driver<USB>>> =
 static LED: Mutex<CriticalSectionRawMutex, Option<Output<'static, AnyPin>>> =
     Mutex::new(None);
 
-static DISPLAY: DotMatrixDisplayMutex<ShiftRegisterOutput> =
-    DotMatrixDisplayMutex::new();
+// static DISPLAY: DotMatrixDisplayMutex<ShiftRegisterOutput> =
+//     DotMatrixDisplayMutex::new();
+
+static DISPLAYS: Displays<ShiftRegisterOutput> = Displays::new();
 
 // used in setting up usb-serial
 bind_interrupts!(struct Irqs {
@@ -86,7 +88,7 @@ async fn clock() {
     if let Some(clock) = DATA.lock().await.clock {
         let string = str::from_utf8(&clock[..]).unwrap();
         // panorama2("  ", false).await;
-        DISPLAY.panorama2(string, false).await;
+        DISPLAYS.panorama(string, false).await;
     }
 }
 
@@ -94,29 +96,31 @@ async fn weather() {
     if let Some(weather) = DATA.lock().await.weather {
         let string = str::from_utf8(&weather[..]).unwrap();
         // panorama2("  ", false).await;
-        DISPLAY.panorama2(string, false).await;
+        DISPLAYS.panorama(string, false).await;
     }
 }
 
 #[embassy_executor::task]
 async fn animate() {
-    let mut ticker = Ticker::every(Duration::from_micros(100));
     loop {
-        DISPLAY.panorama2(" AKIHABARA ", false).await;
-        DISPLAY.pulse().await;
+        // DISPLAYS[1].panorama2(" AKIHABARA ", false).await;
+        DISPLAYS.panorama("  AKIHABARA  ", false).await;
+
+        DISPLAYS[1].pulse().await;
         clock().await;
-        DISPLAY.pulse().await;
+        DISPLAYS[1].pulse().await;
         weather().await;
-        DISPLAY.pulse().await;
-        ticker.next().await;
+        DISPLAYS[1].pulse().await;
     }
 }
 
 #[embassy_executor::task]
-async fn render_display() {
-    let mut ticker = Ticker::every(Duration::from_micros(100));
+async fn render_displays() {
+    let mut ticker = Ticker::every(Duration::from_micros(200));
     loop {
-        DISPLAY.render().await;
+        for d in &*DISPLAYS {
+            d.render().await;
+        }
         ticker.next().await;
     }
 }
@@ -154,10 +158,12 @@ async fn handle_commands<'d, T: Instance + 'd>(
                     graphics: alert,
                     len: 8,
                 };
-                DISPLAY.set_override(true).await;
-                DISPLAY.flash(panorama, true).await;
-                DISPLAY.panorama2(a, true).await;
-                DISPLAY.set_override(false).await;
+                DISPLAYS[0].set_override(true).await;
+                DISPLAYS[1].set_override(true).await;
+                DISPLAYS[1].flash(panorama, true).await;
+                DISPLAYS.panorama(a, true).await;
+                DISPLAYS[0].set_override(false).await;
+                DISPLAYS[1].set_override(false).await;
             }
             "1" => {
                 //store clock
@@ -249,29 +255,7 @@ async fn main(spawner: Spawner) {
     let p = embassy_rp::init(Default::default());
 
     {
-        let display = Display {
-            // output_driver: GpioOutput {
-            //     rows: [
-            //         Line::new_anode(AnyPin::from(p.PIN_9)),
-            //         Line::new_anode(AnyPin::from(p.PIN_14)),
-            //         Line::new_anode(AnyPin::from(p.PIN_8)),
-            //         Line::new_anode(AnyPin::from(p.PIN_12)),
-            //         Line::new_anode(AnyPin::from(p.PIN_1)),
-            //         Line::new_anode(AnyPin::from(p.PIN_7)),
-            //         Line::new_anode(AnyPin::from(p.PIN_2)),
-            //         Line::new_anode(AnyPin::from(p.PIN_5)),
-            //     ],
-            //     cols: [
-            //         Line::new_cathode(AnyPin::from(p.PIN_13)),
-            //         Line::new_cathode(AnyPin::from(p.PIN_3)),
-            //         Line::new_cathode(AnyPin::from(p.PIN_4)),
-            //         Line::new_cathode(AnyPin::from(p.PIN_10)),
-            //         Line::new_cathode(AnyPin::from(p.PIN_6)),
-            //         Line::new_cathode(AnyPin::from(p.PIN_11)),
-            //         Line::new_cathode(AnyPin::from(p.PIN_15)),
-            //         Line::new_cathode(AnyPin::from(p.PIN_16)),
-            //     ],
-            // },
+        let display0 = Display {
             output_driver: ShiftRegisterOutput {
                 ser: Line::new_anode(AnyPin::from(p.PIN_2)),
                 oe: Line::new_cathode(AnyPin::from(p.PIN_22)), // 適当値;未使用
@@ -279,14 +263,24 @@ async fn main(spawner: Spawner) {
                 srclk: Line::new_anode(AnyPin::from(p.PIN_4)),
                 srclr: Line::new_cathode(AnyPin::from(p.PIN_5)),
             },
-            graphic: graphics::EMPTY,
+            graphic: graphics::LETTER_A,
             overridden: false,
         };
-        *(DISPLAY.0.lock().await) = Some(display);
-    }
 
-    let mut power = Output::new(p.PIN_1, Level::Low);
-    power.set_high();
+        let display1 = Display {
+            output_driver: ShiftRegisterOutput {
+                ser: Line::new_anode(AnyPin::from(p.PIN_6)),
+                oe: Line::new_cathode(AnyPin::from(p.PIN_23)), // 適当値;未使用
+                rclk: Line::new_anode(AnyPin::from(p.PIN_7)),
+                srclk: Line::new_anode(AnyPin::from(p.PIN_8)),
+                srclr: Line::new_cathode(AnyPin::from(p.PIN_9)),
+            },
+            graphic: graphics::LETTER_B,
+            overridden: false,
+        };
+        *(DISPLAYS[0].0.lock().await) = Some(display0);
+        *(DISPLAYS[1].0.lock().await) = Some(display1);
+    }
 
     {
         let led = Output::new(AnyPin::from(p.PIN_14), Level::Low);
@@ -300,6 +294,6 @@ async fn main(spawner: Spawner) {
 
     let _ = spawner.spawn(blink());
     let _ = spawner.spawn(setup_serial());
-    let _ = spawner.spawn(render_display());
+    let _ = spawner.spawn(render_displays());
     let _ = spawner.spawn(animate());
 }
