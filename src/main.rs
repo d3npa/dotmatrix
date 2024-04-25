@@ -102,10 +102,10 @@ async fn weather() {
 
 #[embassy_executor::task]
 async fn animate() {
+    Timer::after_secs(5).await;
     loop {
         // DISPLAYS[1].panorama2(" AKIHABARA ", false).await;
-        DISPLAYS.panorama("  AKIHABARA  ", false).await;
-
+        DISPLAYS.panorama("    AKIHABARA    ", false).await;
         DISPLAYS[1].pulse().await;
         clock().await;
         DISPLAYS[1].pulse().await;
@@ -116,7 +116,7 @@ async fn animate() {
 
 #[embassy_executor::task]
 async fn render_displays() {
-    let mut ticker = Ticker::every(Duration::from_micros(200));
+    let mut ticker = Ticker::every(Duration::from_micros(500));
     loop {
         for d in &*DISPLAYS {
             d.render().await;
@@ -278,8 +278,35 @@ async fn main(spawner: Spawner) {
             graphic: graphics::LETTER_B,
             overridden: false,
         };
+
+        let display2 = Display {
+            output_driver: ShiftRegisterOutput {
+                ser: Line::new_anode(AnyPin::from(p.PIN_10)),
+                oe: Line::new_cathode(AnyPin::from(p.PIN_16)), // 適当値;未使用
+                rclk: Line::new_anode(AnyPin::from(p.PIN_11)),
+                srclk: Line::new_anode(AnyPin::from(p.PIN_12)),
+                srclr: Line::new_cathode(AnyPin::from(p.PIN_13)),
+            },
+            graphic: graphics::LETTER_C,
+            overridden: false,
+        };
+
+        let display3 = Display {
+            output_driver: ShiftRegisterOutput {
+                ser: Line::new_anode(AnyPin::from(p.PIN_21)),
+                oe: Line::new_cathode(AnyPin::from(p.PIN_17)), // 適当値;未使用
+                rclk: Line::new_anode(AnyPin::from(p.PIN_20)),
+                srclk: Line::new_anode(AnyPin::from(p.PIN_19)),
+                srclr: Line::new_cathode(AnyPin::from(p.PIN_18)),
+            },
+            graphic: graphics::LETTER_D,
+            overridden: false,
+        };
+
         *(DISPLAYS[0].0.lock().await) = Some(display0);
         *(DISPLAYS[1].0.lock().await) = Some(display1);
+        *(DISPLAYS[2].0.lock().await) = Some(display2);
+        *(DISPLAYS[3].0.lock().await) = Some(display3);
     }
 
     {
@@ -293,7 +320,7 @@ async fn main(spawner: Spawner) {
     }
 
     let _ = spawner.spawn(blink());
-    let _ = spawner.spawn(setup_serial());
+    // let _ = spawner.spawn(setup_serial()); // serial taking too much ram??
     let _ = spawner.spawn(render_displays());
     let _ = spawner.spawn(animate());
 }

@@ -334,10 +334,10 @@ where
     }
 }
 
-pub struct Displays<O: DotMatrixOutput>([DotMatrixDisplayMutex<O>; 2]);
+pub struct Displays<O: DotMatrixOutput>([DotMatrixDisplayMutex<O>; 4]);
 
 impl<O: DotMatrixOutput> Deref for Displays<O> {
-    type Target = [DotMatrixDisplayMutex<O>; 2];
+    type Target = [DotMatrixDisplayMutex<O>; 4];
     fn deref(&self) -> &Self::Target {
         &self.0
     }
@@ -345,7 +345,12 @@ impl<O: DotMatrixOutput> Deref for Displays<O> {
 
 impl<O: DotMatrixOutput> Displays<O> {
     pub const fn new() -> Self {
-        Self([DotMatrixDisplayMutex::new(), DotMatrixDisplayMutex::new()])
+        Self([
+            DotMatrixDisplayMutex::new(),
+            DotMatrixDisplayMutex::new(),
+            DotMatrixDisplayMutex::new(),
+            DotMatrixDisplayMutex::new(),
+        ])
     }
 
     pub async fn panorama(&self, message: &str, prio: bool) {
@@ -357,6 +362,14 @@ impl<O: DotMatrixOutput> Displays<O> {
             self[1].panorama2(&message[1..], prio).await;
         };
 
-        embassy_futures::join::join(d0, d1).await;
+        let d2 = async {
+            self[2].panorama2(&message[2..], prio).await;
+        };
+
+        let d3 = async {
+            self[3].panorama2(&message[3..], prio).await;
+        };
+
+        embassy_futures::join::join4(d0, d1, d2, d3).await;
     }
 }
