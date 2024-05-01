@@ -1,6 +1,8 @@
 #![no_std]
 
 use core::ops::Deref;
+use core::str;
+use core::{borrow::BorrowMut, cmp::min};
 
 use embassy_sync::{
     blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex,
@@ -10,11 +12,15 @@ use embassy_time::{Duration, Ticker};
 pub mod graphics;
 pub mod hal;
 
+pub mod serialdrv;
+
 use graphics::Graphic;
 
 use hal::DotMatrixLed;
 
 pub static DISPLAYS: Displays<'static> = Displays::new();
+pub static DATA: Mutex<CriticalSectionRawMutex, Data> =
+    Mutex::new(Data::new());
 
 pub struct DotMatrixLedMutex<'a>(
     pub Mutex<CriticalSectionRawMutex, Option<DotMatrixLed<'a>>>,
@@ -66,9 +72,9 @@ impl<'a> DotMatrixLedMutex<'a> {
         }
     }
 
-    pub async fn draw(&self, g: Graphic) {
+    pub async fn draw(&self, g: &Graphic) {
         if let Some(d) = self.0.lock().await.as_mut() {
-            d.graphic = g;
+            d.graphic = *g;
         }
     }
 
@@ -85,7 +91,7 @@ impl<'a> DotMatrixLedMutex<'a> {
             }
 
             let graphic = panorama.graphics[i];
-            self.draw(*graphic).await;
+            self.draw(graphic).await;
             ticker.next().await;
         }
     }
@@ -110,7 +116,7 @@ impl<'a> DotMatrixLedMutex<'a> {
 
             counter += 1;
             counter %= 16;
-            self.draw(canvas).await;
+            self.draw(&canvas).await;
             ticker.next().await;
             if counter == 0 {
                 iters += 1;
@@ -123,7 +129,7 @@ impl<'a> DotMatrixLedMutex<'a> {
 
     pub async fn panorama2(&self, message: &str, prio: bool) {
         // let panorama_cols = message.len() * 8;
-        let mut ticker = Ticker::every(Duration::from_millis(40));
+        let mut ticker = Ticker::every(Duration::from_millis(30));
 
         for pair in message.chars().zip(message.chars().skip(1)) {
             let mut cursor = 0;
@@ -156,7 +162,7 @@ impl<'a> DotMatrixLedMutex<'a> {
                 }
 
                 cursor += 1;
-                self.draw(canvas).await;
+                self.draw(&canvas).await;
                 ticker.next().await;
             }
         }
@@ -183,22 +189,69 @@ impl<'a> Displays<'a> {
     }
 
     pub async fn panorama(&self, message: &str, prio: bool) {
-        let d0 = async {
-            self[0].panorama2(&message, prio).await;
-        };
+        embassy_futures::join::join4(
+            self[0].panorama2(&message, prio),
+            self[1].panorama2(&message[1..], prio),
+            self[2].panorama2(&message[2..], prio),
+            self[3].panorama2(&message[3..], prio),
+        )
+        .await;
+        // let d0 = async {
+        //     self[0].panorama2(&message, prio).await;
+        // };
 
-        let d1 = async {
-            self[1].panorama2(&message[1..], prio).await;
-        };
+        // let d1 = async {
+        //     self[1].panorama2(&message[1..], prio).await;
+        // };
 
-        let d2 = async {
-            self[2].panorama2(&message[2..], prio).await;
-        };
+        // let d2 = async {
+        //     self[2].panorama2(&message[2..], prio).await;
+        // };
 
-        let d3 = async {
-            self[3].panorama2(&message[3..], prio).await;
-        };
+        // let d3 = async {
+        //     self[3].panorama2(&message[3..], prio).await;
+        // };
 
-        embassy_futures::join::join4(d0, d1, d2, d3).await;
+        // embassy_futures::join::join4(d0, d1, d2, d3).await;
     }
+}
+
+#[derive(Debug)]
+pub enum Error {
+    Utf8,
+    // DataLength,
+}
+
+type ClockString = [u8; 9];
+type WeatherString = [u8; 7];
+
+pub struct Data {
+    pub clock: Option<ClockString>,
+    pub weather: Option<WeatherString>,
+}
+
+impl Data {
+    #[allow(unused)]
+    const fn new() -> Self {
+        Self {
+            clock: None,
+            weather: None,
+        }
+    }
+}
+
+pub fn copy_str_bytes<const LEN: usize>(
+    buf: &[u8],
+) -> Result<[u8; LEN], Error> {
+    if let Err(_) = str::from_utf8(buf) {
+        return Err(Error::Utf8);
+    }
+
+    let mut out = [0u8; LEN];
+    let copy_len = min(buf.len(), out.len());
+    for i in 0..copy_len {
+        out[i] = buf[i];
+    }
+
+    Ok(out)
 }
