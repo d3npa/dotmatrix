@@ -222,8 +222,8 @@ pub enum Error {
     // DataLength,
 }
 
-type ClockString = [u8; 9];
-type WeatherString = [u8; 7];
+type ClockString = [u8; 10];
+type WeatherString = [u8; 8];
 
 pub struct Data {
     pub clock: Option<ClockString>,
