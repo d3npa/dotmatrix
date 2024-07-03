@@ -1,8 +1,8 @@
 #![no_std]
 
+use core::cmp::min;
 use core::ops::Deref;
 use core::str;
-use core::{borrow::BorrowMut, cmp::min};
 
 use embassy_sync::{
     blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex,
@@ -12,7 +12,7 @@ use embassy_time::{Duration, Ticker};
 pub mod graphics;
 pub mod hal;
 
-pub mod serialdrv;
+// pub mod serialdrv;
 
 use graphics::Graphic;
 
@@ -80,7 +80,7 @@ impl<'a> DotMatrixLedMutex<'a> {
 
     pub async fn flash(
         &self,
-        panorama: graphics::Panorama,
+        panorama: &graphics::Panorama,
         ignore_lock: bool,
     ) {
         let mut ticker = Ticker::every(Self::FLASH_DURATION);
@@ -189,6 +189,8 @@ impl<'a> Displays<'a> {
     }
 
     pub async fn panorama(&self, message: &str, prio: bool) {
+        let p = pad(message.as_bytes());
+        let message = null_term_string(&p);
         embassy_futures::join::join4(
             self[0].panorama2(&message, prio),
             self[1].panorama2(&message[1..], prio),
@@ -196,23 +198,33 @@ impl<'a> Displays<'a> {
             self[3].panorama2(&message[3..], prio),
         )
         .await;
-        // let d0 = async {
-        //     self[0].panorama2(&message, prio).await;
-        // };
+    }
 
-        // let d1 = async {
-        //     self[1].panorama2(&message[1..], prio).await;
-        // };
+    pub async fn set_override(&self, v: bool) {
+        for d in &self.0 {
+            d.set_override(v).await;
+        }
+    }
 
-        // let d2 = async {
-        //     self[2].panorama2(&message[2..], prio).await;
-        // };
-
-        // let d3 = async {
-        //     self[3].panorama2(&message[3..], prio).await;
-        // };
-
-        // embassy_futures::join::join4(d0, d1, d2, d3).await;
+    pub async fn alert(&self) {
+        let alert = graphics::Panorama {
+            graphics: {
+                let mut g = [&graphics::EMPTY; 8];
+                g[1] = &graphics::FULL;
+                g[3] = &graphics::FULL;
+                g[5] = &graphics::FULL;
+                g[7] = &graphics::FULL;
+                g
+            },
+            len: 8,
+        };
+        embassy_futures::join::join4(
+            self[0].flash(&alert, true),
+            self[1].flash(&alert, true),
+            self[2].flash(&alert, true),
+            self[3].flash(&alert, true),
+        )
+        .await;
     }
 }
 
@@ -222,8 +234,8 @@ pub enum Error {
     // DataLength,
 }
 
-type ClockString = [u8; 10];
-type WeatherString = [u8; 8];
+type ClockString = [u8; 16];
+type WeatherString = [u8; 16];
 
 pub struct Data {
     pub clock: Option<ClockString>,
@@ -254,4 +266,51 @@ pub fn copy_str_bytes<const LEN: usize>(
     }
 
     Ok(out)
+}
+
+/// pads string with spaces, so it can be scrolled on displays
+/// four spaces are prepended, and one space is appended
+/// the string will be truncated if it is more than 59 (64 - 5) chars
+pub fn pad(string: &[u8]) -> [u8; 64] {
+    let mut out = [0x0; 64];
+    let mut cursor = 0;
+
+    for _i in 0..4 {
+        out[cursor] = 0x20; // スペース文字
+        cursor += 1;
+    }
+
+    use core::cmp::min;
+    let msg_part_len = min(string.len(), out.len() - 5);
+
+    for i in 0..msg_part_len {
+        if string[i] == 0 {
+            break; // doing this bc calling from clock() and weather(), string contains nulls and if i don't break here then the final 0x20 under will be pushed back and eventually cut by null_term_string. these funcs need to be merged somehow...
+        }
+        out[cursor] = string[i];
+        cursor += 1;
+    }
+
+    // after last char from string
+    out[cursor] = 0x20;
+    // cursor += 1;
+
+    out
+}
+
+pub fn null_term_string<'a>(data: &'a [u8]) -> &'a str {
+    let mut null_index = 0;
+    for i in 0..data.len() {
+        if data[i] == 0 {
+            null_index = i;
+            break;
+        }
+    }
+
+    let s = match str::from_utf8(&data[..null_index]) {
+        Ok(s) => s,
+        Err(_) => "", // TODO: return result
+    };
+
+    s
 }

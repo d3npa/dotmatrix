@@ -33,7 +33,7 @@ impl<'a> Line<'a> {
 // TODO: rewrite. this should be a generic ShiftRegister
 pub struct ShiftRegister<'a> {
     pub ser: Line<'a>,
-    pub oe: Line<'a>,
+    // pub oe: Line<'a>,
     pub rclk: Line<'a>,
     pub srclk: Line<'a>,
     pub srclr: Line<'a>,
