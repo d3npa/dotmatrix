@@ -326,17 +326,16 @@ async fn main(spawner: Spawner) {
 
                 buf[n] = 0;
 
-                let string = dotmatrix::null_term_string(&buf);
+                if let Ok(string) = dotmatrix::null_term_string(&buf) {
+                    if string.is_empty() {
+                        continue;
+                    }
 
-                if string.is_empty() {
-                    continue; // null見つからなかった場合はここで抜ける
+                    let status = handle_command(string.trim()).await;
+                    if socket.write_all(&status.mesg).await.is_err() {
+                        break;
+                    }
                 }
-
-                let status = handle_command(string.trim()).await;
-                match socket.write_all(&status.mesg).await {
-                    Ok(()) => {}
-                    Err(_e) => break,
-                };
             }
         }
     }

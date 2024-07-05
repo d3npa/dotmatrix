@@ -198,7 +198,7 @@ impl<'a> Displays<'a> {
 
     pub async fn panorama(&self, message: &str, prio: bool) {
         let p = pad(message.as_bytes());
-        let message = null_term_string(&p);
+        let message = null_term_string(&p).unwrap_or("");
         embassy_futures::join::join4(
             self[0].panorama2(message, prio),
             self[1].panorama2(&message[1..], prio),
@@ -304,7 +304,7 @@ pub fn pad(string: &[u8]) -> [u8; 64] {
     out
 }
 
-pub fn null_term_string(data: &[u8]) -> &str {
+pub fn null_term_string(data: &[u8]) -> Result<&str, Error> {
     let mut null_index = 0;
 
     for (index, &byte) in data.iter().enumerate() {
@@ -315,9 +315,8 @@ pub fn null_term_string(data: &[u8]) -> &str {
     }
 
     let s = match str::from_utf8(&data[..null_index]) {
-        Ok(s) => s,
-        Err(_) => todo!("return UTF8 error"),
-        /* return Err(Error::Utf8); */
+        Ok(s) => Ok(s),
+        Err(_) => Err(Error::Utf8),
     };
 
     s
