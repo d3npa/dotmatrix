@@ -227,9 +227,9 @@ async fn main(spawner: Spawner) {
             .await;
 
         use embassy_net::{
-            ConfigV4, Ipv4Address, Ipv4Cidr, Ipv6Address, Ipv6Cidr,
-            StaticConfigV4,
+            Ipv4Address, Ipv4Cidr, Ipv6Address, Ipv6Cidr, StaticConfigV4,
         };
+
         use heapless::Vec;
 
         // let config = Config::dhcpv4(Default::default());
@@ -281,11 +281,10 @@ async fn main(spawner: Spawner) {
         Timer::after_secs(1).await;
         ctrl.gpio_set(0, false).await;
 
-        loop {
-            match ctrl.join_wpa2(WIFI_NETWORK, WIFI_PASSWORD).await {
-                Ok(_) => break,
-                Err(_) => return,
-            }
+        if ctrl.join_wpa2(WIFI_NETWORK, WIFI_PASSWORD).await.is_err() {
+            /* require reboot when failed to join wifi. network code won't run
+            but other tasks, which were already spawned, will continue */
+            return;
         }
 
         ctrl.gpio_set(0, true).await;
@@ -295,7 +294,6 @@ async fn main(spawner: Spawner) {
         while !stack.is_config_up() {
             Timer::after_millis(100).await;
         }
-        // dhcp is now up!
 
         use embedded_io_async::Write;
         let mut rx_buffer = [0; 4096];
@@ -308,9 +306,11 @@ async fn main(spawner: Spawner) {
             socket.set_timeout(Some(Duration::from_secs(10)));
 
             ctrl.gpio_set(0, false).await;
-            if let Err(_) = socket.accept(1234).await {
+
+            if socket.accept(1234).await.is_err() {
                 continue;
             }
+
             ctrl.gpio_set(0, true).await;
 
             if let Err(_e) = socket.write_all(b"[*] welcome~\n").await {
@@ -328,7 +328,7 @@ async fn main(spawner: Spawner) {
 
                 let string = dotmatrix::null_term_string(&buf);
 
-                if string.len() == 0 {
+                if string.is_empty() {
                     continue; // null見つからなかった場合はここで抜ける
                 }
 
@@ -366,7 +366,7 @@ async fn handle_command(argv: &str) -> CommandStatus {
             DISPLAYS.alert().await;
             DISPLAYS.panorama(a, true).await;
             DISPLAYS.set_override(false).await;
-            return CommandStatus::new("[*] echoing message\n");
+            CommandStatus::new("[*] echoing message\n")
         }
         "1" => {
             // store clk
@@ -375,7 +375,7 @@ async fn handle_command(argv: &str) -> CommandStatus {
                 Ok(v) => v,
                 Err(_) => return CommandStatus::new("[*] error :c"),
             });
-            return CommandStatus::new("[*] clock set! ^-^\n");
+            CommandStatus::new("[*] clock set! ^-^\n")
         }
         "2" => {
             // store weather
@@ -385,11 +385,11 @@ async fn handle_command(argv: &str) -> CommandStatus {
                     Ok(v) => v,
                     Err(_) => return CommandStatus::new("[*] error :c"),
                 });
-            return CommandStatus::new("[*] weather set! ^-^\n");
+            CommandStatus::new("[*] weather set! ^-^\n")
         }
         _ => {
             // unknown command
-            return CommandStatus::new("[*] unknown command :c\n");
+            CommandStatus::new("[*] unknown command :c\n")
         }
     }
 }

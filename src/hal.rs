@@ -60,6 +60,7 @@ impl<'a> ShiftRegister<'a> {
         // self.write_short(Self::EMPTY_SIGNAL);
     }
 
+    #[allow(clippy::bool_comparison)]
     pub fn write_short(&mut self, data: u16) {
         for bit in (0..16).map(|i| data & (1 << i) != 0) {
             if bit == true {
@@ -87,15 +88,14 @@ impl<'a> DotMatrixLed<'a> {
     }
 
     pub fn render(&mut self) {
-        let g = self.graphic;
         let row_map = [9, 14, 8, 12, 1, 7, 2, 5];
         let col_map = [13, 3, 4, 10, 6, 11, 15, 16];
-        for r in 0..g.len() {
+        for (row_index, row) in self.graphic.iter().enumerate() {
             let mut signal = Self::EMPTY_SIGNAL;
-            for c in 0..g[r].len() {
-                if g[r][c] == 1 {
-                    signal |= 1 << (row_map[r] - 1);
-                    signal &= !(1u16 << (col_map[c] - 1));
+            for (col_index, &pixel) in row.iter().enumerate() {
+                if pixel == 1 {
+                    signal |= 1 << (row_map[row_index] - 1);
+                    signal &= !(1u16 << (col_map[col_index] - 1));
                 }
             }
             self.sr.write_short(signal);

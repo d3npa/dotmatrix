@@ -1,6 +1,7 @@
 #![no_std]
 
 use core::cmp::min;
+use core::default::Default;
 use core::ops::Deref;
 use core::str;
 
@@ -25,6 +26,12 @@ pub static DATA: Mutex<CriticalSectionRawMutex, Data> =
 pub struct DotMatrixLedMutex<'a>(
     pub Mutex<CriticalSectionRawMutex, Option<DotMatrixLed<'a>>>,
 );
+
+impl<'a> Default for DotMatrixLedMutex<'a> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl<'a> DotMatrixLedMutex<'a> {
     const FLASH_DURATION: Duration = Duration::from_millis(100);
@@ -107,10 +114,10 @@ impl<'a> DotMatrixLedMutex<'a> {
             }
             // moving diagonal stripe
             let mut canvas = graphics::EMPTY;
-            for r in 0..canvas.len() {
-                let n = counter - r;
-                if n < canvas[r].len() {
-                    canvas[r][n] = 1;
+            for (row_index, row) in canvas.iter_mut().enumerate() {
+                let n = counter - row_index;
+                if n < row.len() {
+                    row[n] = 1;
                 }
             }
 
@@ -169,6 +176,7 @@ impl<'a> DotMatrixLedMutex<'a> {
     }
 }
 
+#[derive(Default)]
 pub struct Displays<'a>([DotMatrixLedMutex<'a>; 4]);
 
 impl<'a> Deref for Displays<'a> {
@@ -192,7 +200,7 @@ impl<'a> Displays<'a> {
         let p = pad(message.as_bytes());
         let message = null_term_string(&p);
         embassy_futures::join::join4(
-            self[0].panorama2(&message, prio),
+            self[0].panorama2(message, prio),
             self[1].panorama2(&message[1..], prio),
             self[2].panorama2(&message[2..], prio),
             self[3].panorama2(&message[3..], prio),
@@ -255,15 +263,13 @@ impl Data {
 pub fn copy_str_bytes<const LEN: usize>(
     buf: &[u8],
 ) -> Result<[u8; LEN], Error> {
-    if let Err(_) = str::from_utf8(buf) {
+    if str::from_utf8(buf).is_err() {
         return Err(Error::Utf8);
     }
 
     let mut out = [0u8; LEN];
     let copy_len = min(buf.len(), out.len());
-    for i in 0..copy_len {
-        out[i] = buf[i];
-    }
+    out[..copy_len].copy_from_slice(&buf[..copy_len]);
 
     Ok(out)
 }
@@ -283,11 +289,11 @@ pub fn pad(string: &[u8]) -> [u8; 64] {
     use core::cmp::min;
     let msg_part_len = min(string.len(), out.len() - 5);
 
-    for i in 0..msg_part_len {
-        if string[i] == 0 {
+    for &character in string.iter().take(msg_part_len) {
+        if character == 0 {
             break; // doing this bc calling from clock() and weather(), string contains nulls and if i don't break here then the final 0x20 under will be pushed back and eventually cut by null_term_string. these funcs need to be merged somehow...
         }
-        out[cursor] = string[i];
+        out[cursor] = character;
         cursor += 1;
     }
 
@@ -298,18 +304,20 @@ pub fn pad(string: &[u8]) -> [u8; 64] {
     out
 }
 
-pub fn null_term_string<'a>(data: &'a [u8]) -> &'a str {
+pub fn null_term_string(data: &[u8]) -> &str {
     let mut null_index = 0;
-    for i in 0..data.len() {
-        if data[i] == 0 {
-            null_index = i;
+
+    for (index, &byte) in data.iter().enumerate() {
+        if byte == 0 {
+            null_index = index;
             break;
         }
     }
 
     let s = match str::from_utf8(&data[..null_index]) {
         Ok(s) => s,
-        Err(_) => "", // TODO: return result
+        Err(_) => todo!("return UTF8 error"),
+        /* return Err(Error::Utf8); */
     };
 
     s
