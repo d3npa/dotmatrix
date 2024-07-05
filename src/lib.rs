@@ -314,10 +314,5 @@ pub fn null_term_string(data: &[u8]) -> Result<&str, Error> {
         }
     }
 
-    let s = match str::from_utf8(&data[..null_index]) {
-        Ok(s) => Ok(s),
-        Err(_) => Err(Error::Utf8),
-    };
-
-    s
+    str::from_utf8(&data[..null_index]).map_err(|_| Error::Utf8)
 }
