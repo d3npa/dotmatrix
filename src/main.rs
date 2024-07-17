@@ -4,6 +4,7 @@
 use core::panic::PanicInfo;
 use core::str;
 
+use cyw43::NetDriver;
 use dotmatrix::graphics;
 use dotmatrix::hal::{DotMatrixLed, Line, ShiftRegister};
 
@@ -195,17 +196,22 @@ async fn main(spawner: Spawner) {
     }
 }
 
-pub async fn configure_network(
+use cyw43::Control;
+use embedded_io_async::Write;
+
+pub async fn init_wifi(
     spawner: &Spawner,
     pwr: Output<'static, PIN_23>,
     spi: PioSpi<'static, PIN_25, PIO0, 0, DMA_CH0>,
-) {
+) -> (NetDriver<'static>, Control<'static>) {
+    /* init wifi */
+
     let fw = include_bytes!("../cyw43-firmware/43439A0.bin");
     let clm = include_bytes!("../cyw43-firmware/43439A0_clm.bin");
 
     static STATE: StaticCell<cyw43::State> = StaticCell::new();
     let state = STATE.init(cyw43::State::new());
-    let (net_dev, mut ctrl, runner) = cyw43::new(state, pwr, spi, fw).await;
+    let (dev, mut ctrl, runner) = cyw43::new(state, pwr, spi, fw).await;
 
     let _ = spawner.spawn(wifi_task(runner));
 
@@ -213,6 +219,33 @@ pub async fn configure_network(
     ctrl.set_power_management(cyw43::PowerManagementMode::PowerSave)
         .await;
 
+    ctrl.gpio_set(0, true).await;
+    Timer::after_secs(1).await;
+    ctrl.gpio_set(0, false).await;
+
+    if ctrl.join_wpa2(WIFI_NETWORK, WIFI_PASSWORD).await.is_err() {
+        /* require reboot when failed to join wifi. network code won't run
+        but other tasks, which were already spawned, will continue */
+        todo!(
+            "exit async task without disrupting others. maybe using Result?"
+        );
+    }
+
+    ctrl.gpio_set(0, true).await;
+    Timer::after_secs(1).await;
+    ctrl.gpio_set(0, false).await;
+
+    (dev, ctrl)
+}
+
+static STACK: StaticCell<Stack<NetDriver<'static>>> = StaticCell::new();
+static RESOURCES: StaticCell<StackResources<2>> = StaticCell::new();
+
+pub async fn init_ip(
+    spawner: &Spawner,
+    net_dev: NetDriver<'static>,
+) -> &'static Stack<NetDriver<'static>> {
+    /* init ip stack */
     use embassy_net::{
         Ipv4Address, Ipv4Cidr, Ipv6Address, Ipv6Cidr, StaticConfigV4,
     };
@@ -247,10 +280,9 @@ pub async fn configure_network(
     config.ipv6 = ConfigV6::Static(ipv6_config);
 
     let seed = 0x0123_4567_89ab_cdef;
+
     // Init network stack
-    static STACK: StaticCell<Stack<cyw43::NetDriver<'static>>> =
-        StaticCell::new();
-    static RESOURCES: StaticCell<StackResources<2>> = StaticCell::new();
+
     let stack = &*STACK.init(Stack::new(
         net_dev,
         config,
@@ -259,26 +291,21 @@ pub async fn configure_network(
     ));
 
     let _ = spawner.spawn(net_task(stack));
+    stack
+}
 
-    ctrl.gpio_set(0, true).await;
-    Timer::after_secs(1).await;
-    ctrl.gpio_set(0, false).await;
-
-    if ctrl.join_wpa2(WIFI_NETWORK, WIFI_PASSWORD).await.is_err() {
-        /* require reboot when failed to join wifi. network code won't run
-        but other tasks, which were already spawned, will continue */
-        return;
-    }
-
-    ctrl.gpio_set(0, true).await;
-    Timer::after_secs(1).await;
-    ctrl.gpio_set(0, false).await;
+pub async fn configure_network(
+    spawner: &Spawner,
+    pwr: Output<'static, PIN_23>,
+    spi: PioSpi<'static, PIN_25, PIO0, 0, DMA_CH0>,
+) {
+    let (net_dev, mut ctrl) = init_wifi(&spawner, pwr, spi).await;
+    let stack = init_ip(&spawner, net_dev).await;
 
     while !stack.is_config_up() {
         Timer::after_millis(100).await;
     }
 
-    use embedded_io_async::Write;
     let mut rx_buffer = [0; 4096];
     let mut tx_buffer = [0; 4096];
     let mut buf = [0; 4096];
