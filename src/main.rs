@@ -22,9 +22,9 @@ use embassy_rp::peripherals::{DMA_CH0, PIN_23, PIN_25, PIO0};
 use embassy_rp::pio::Pio;
 use static_cell::StaticCell;
 
+use dotmatrix::tcpserver;
 use dotmatrix::DATA;
 use dotmatrix::DISPLAYS;
-use dotmatrix::tcpserver;
 
 use embassy_rp::bind_interrupts;
 use embassy_rp::pio::InterruptHandler;
@@ -195,15 +195,17 @@ async fn main(spawner: Spawner) {
     }
 }
 
-pub async fn configure_network(spawner: &Spawner, pwr: Output<'static, PIN_23>, spi: PioSpi<'static, PIN_25, PIO0, 0, DMA_CH0>) {
-
+pub async fn configure_network(
+    spawner: &Spawner,
+    pwr: Output<'static, PIN_23>,
+    spi: PioSpi<'static, PIN_25, PIO0, 0, DMA_CH0>,
+) {
     let fw = include_bytes!("../cyw43-firmware/43439A0.bin");
     let clm = include_bytes!("../cyw43-firmware/43439A0_clm.bin");
 
     static STATE: StaticCell<cyw43::State> = StaticCell::new();
     let state = STATE.init(cyw43::State::new());
-    let (net_dev, mut ctrl, runner) =
-        cyw43::new(state, pwr, spi, fw).await;
+    let (net_dev, mut ctrl, runner) = cyw43::new(state, pwr, spi, fw).await;
 
     let _ = spawner.spawn(wifi_task(runner));
 
@@ -235,7 +237,9 @@ pub async fn configure_network(spawner: &Spawner, pwr: Output<'static, PIN_23>, 
             Ipv6Address::new(0xfd00, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0005),
             64,
         ),
-        gateway: Some(Ipv6Address::new(0xfd00, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0001)),
+        gateway: Some(Ipv6Address::new(
+            0xfd00, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0001,
+        )),
         dns_servers,
     };
 
@@ -280,8 +284,7 @@ pub async fn configure_network(spawner: &Spawner, pwr: Output<'static, PIN_23>, 
     let mut buf = [0; 4096];
 
     loop {
-        let mut socket =
-            TcpSocket::new(stack, &mut rx_buffer, &mut tx_buffer);
+        let mut socket = TcpSocket::new(stack, &mut rx_buffer, &mut tx_buffer);
         socket.set_timeout(Some(Duration::from_secs(10)));
 
         ctrl.gpio_set(0, false).await;
