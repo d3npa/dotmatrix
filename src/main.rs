@@ -19,6 +19,9 @@ use embassy_rp::gpio::Level;
 use embassy_rp::gpio::Output;
 use embassy_rp::peripherals::{DMA_CH0, PIN_23, PIN_25, PIO0};
 
+use embassy_rp::pio::Pio;
+use static_cell::StaticCell;
+
 use dotmatrix::DATA;
 use dotmatrix::DISPLAYS;
 use dotmatrix::tcpserver;
@@ -175,12 +178,6 @@ async fn main(spawner: Spawner) {
     {
         // network code
 
-        let fw = include_bytes!("../cyw43-firmware/43439A0.bin");
-        let clm = include_bytes!("../cyw43-firmware/43439A0_clm.bin");
-
-        use embassy_rp::gpio::Level;
-        use embassy_rp::pio::Pio;
-        use static_cell::StaticCell;
         let pwr = Output::new(p.PIN_23, Level::Low);
         let cs = Output::new(p.PIN_25, Level::High);
         let mut pio = Pio::new(p.PIO0, Irqs2);
@@ -194,122 +191,130 @@ async fn main(spawner: Spawner) {
             p.DMA_CH0,
         );
 
-        static STATE: StaticCell<cyw43::State> = StaticCell::new();
-        let state = STATE.init(cyw43::State::new());
-        let (net_dev, mut ctrl, runner) =
-            cyw43::new(state, pwr, spi, fw).await;
-        let _ = spawner.spawn(wifi_task(runner));
+        configure_network(&spawner, pwr, spi).await;
+    }
+}
 
-        ctrl.init(clm).await;
-        ctrl.set_power_management(cyw43::PowerManagementMode::PowerSave)
-            .await;
+pub async fn configure_network(spawner: &Spawner, pwr: Output<'static, PIN_23>, spi: PioSpi<'static, PIN_25, PIO0, 0, DMA_CH0>) {
 
-        use embassy_net::{
-            Ipv4Address, Ipv4Cidr, Ipv6Address, Ipv6Cidr, StaticConfigV4,
-        };
+    let fw = include_bytes!("../cyw43-firmware/43439A0.bin");
+    let clm = include_bytes!("../cyw43-firmware/43439A0_clm.bin");
 
-        use heapless::Vec;
+    static STATE: StaticCell<cyw43::State> = StaticCell::new();
+    let state = STATE.init(cyw43::State::new());
+    let (net_dev, mut ctrl, runner) =
+        cyw43::new(state, pwr, spi, fw).await;
 
-        let ipv4_config = StaticConfigV4 {
-            address: Ipv4Cidr::new(Ipv4Address::new(192, 168, 1, 5), 24),
-            dns_servers: Vec::new(),
-            gateway: Some(Ipv4Address::new(192, 168, 1, 1)),
-        };
+    let _ = spawner.spawn(wifi_task(runner));
 
-        let mut dns_servers = Vec::<Ipv6Address, 3>::new();
-        dns_servers
-            .push(Ipv6Address::new(
-                0xfd00, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0001,
-            ))
-            .unwrap();
+    ctrl.init(clm).await;
+    ctrl.set_power_management(cyw43::PowerManagementMode::PowerSave)
+        .await;
 
-        let ipv6_config = embassy_net::StaticConfigV6 {
-            address: Ipv6Cidr::new(
-                Ipv6Address::new(0xfd00, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0005),
-                64,
-            ),
-            gateway: None,
-            dns_servers,
-        };
+    use embassy_net::{
+        Ipv4Address, Ipv4Cidr, Ipv6Address, Ipv6Cidr, StaticConfigV4,
+    };
 
-        let mut config = embassy_net::Config::ipv4_static(ipv4_config);
-        config.ipv6 = ConfigV6::Static(ipv6_config);
+    use heapless::Vec;
 
-        let seed = 0x0123_4567_89ab_cdef;
-        // Init network stack
-        static STACK: StaticCell<Stack<cyw43::NetDriver<'static>>> =
-            StaticCell::new();
-        static RESOURCES: StaticCell<StackResources<2>> = StaticCell::new();
-        let stack = &*STACK.init(Stack::new(
-            net_dev,
-            config,
-            RESOURCES.init(StackResources::<2>::new()),
-            seed,
-        ));
+    let ipv4_config = StaticConfigV4 {
+        address: Ipv4Cidr::new(Ipv4Address::new(192, 168, 1, 5), 24),
+        dns_servers: Vec::new(),
+        gateway: Some(Ipv4Address::new(192, 168, 1, 1)),
+    };
 
-        let _ = spawner.spawn(net_task(stack));
+    let mut dns_servers = Vec::<Ipv6Address, 3>::new();
+    dns_servers
+        .push(Ipv6Address::new(
+            0xfd00, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0001,
+        ))
+        .unwrap();
 
-        ctrl.gpio_set(0, true).await;
-        Timer::after_secs(1).await;
+    let ipv6_config = embassy_net::StaticConfigV6 {
+        address: Ipv6Cidr::new(
+            Ipv6Address::new(0xfd00, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0005),
+            64,
+        ),
+        gateway: Some(Ipv6Address::new(0xfd00, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0001)),
+        dns_servers,
+    };
+
+    let mut config = embassy_net::Config::ipv4_static(ipv4_config);
+    config.ipv6 = ConfigV6::Static(ipv6_config);
+
+    let seed = 0x0123_4567_89ab_cdef;
+    // Init network stack
+    static STACK: StaticCell<Stack<cyw43::NetDriver<'static>>> =
+        StaticCell::new();
+    static RESOURCES: StaticCell<StackResources<2>> = StaticCell::new();
+    let stack = &*STACK.init(Stack::new(
+        net_dev,
+        config,
+        RESOURCES.init(StackResources::<2>::new()),
+        seed,
+    ));
+
+    let _ = spawner.spawn(net_task(stack));
+
+    ctrl.gpio_set(0, true).await;
+    Timer::after_secs(1).await;
+    ctrl.gpio_set(0, false).await;
+
+    if ctrl.join_wpa2(WIFI_NETWORK, WIFI_PASSWORD).await.is_err() {
+        /* require reboot when failed to join wifi. network code won't run
+        but other tasks, which were already spawned, will continue */
+        return;
+    }
+
+    ctrl.gpio_set(0, true).await;
+    Timer::after_secs(1).await;
+    ctrl.gpio_set(0, false).await;
+
+    while !stack.is_config_up() {
+        Timer::after_millis(100).await;
+    }
+
+    use embedded_io_async::Write;
+    let mut rx_buffer = [0; 4096];
+    let mut tx_buffer = [0; 4096];
+    let mut buf = [0; 4096];
+
+    loop {
+        let mut socket =
+            TcpSocket::new(stack, &mut rx_buffer, &mut tx_buffer);
+        socket.set_timeout(Some(Duration::from_secs(10)));
+
         ctrl.gpio_set(0, false).await;
 
-        if ctrl.join_wpa2(WIFI_NETWORK, WIFI_PASSWORD).await.is_err() {
-            /* require reboot when failed to join wifi. network code won't run
-            but other tasks, which were already spawned, will continue */
-            return;
+        if socket.accept(1234).await.is_err() {
+            continue;
         }
 
         ctrl.gpio_set(0, true).await;
-        Timer::after_secs(1).await;
-        ctrl.gpio_set(0, false).await;
 
-        while !stack.is_config_up() {
-            Timer::after_millis(100).await;
+        if let Err(_e) = socket.write_all(b"[*] welcome~\n").await {
+            break;
         }
-
-        use embedded_io_async::Write;
-        let mut rx_buffer = [0; 4096];
-        let mut tx_buffer = [0; 4096];
-        let mut buf = [0; 4096];
 
         loop {
-            let mut socket =
-                TcpSocket::new(stack, &mut rx_buffer, &mut tx_buffer);
-            socket.set_timeout(Some(Duration::from_secs(10)));
+            let n = match socket.read(&mut buf).await {
+                Ok(0) => break, // eof
+                Ok(n) => n,
+                Err(_e) => break,
+            };
 
-            ctrl.gpio_set(0, false).await;
+            buf[n] = 0;
 
-            if socket.accept(1234).await.is_err() {
-                continue;
-            }
+            if let Ok(string) = dotmatrix::null_term_string(&buf) {
+                if string.is_empty() {
+                    continue;
+                }
 
-            ctrl.gpio_set(0, true).await;
-
-            if let Err(_e) = socket.write_all(b"[*] welcome~\n").await {
-                break;
-            }
-
-            loop {
-                let n = match socket.read(&mut buf).await {
-                    Ok(0) => break, // eof
-                    Ok(n) => n,
-                    Err(_e) => break,
-                };
-
-                buf[n] = 0;
-
-                if let Ok(string) = dotmatrix::null_term_string(&buf) {
-                    if string.is_empty() {
-                        continue;
-                    }
-
-                    let status = tcpserver::handle_command(string.trim()).await;
-                    if socket.write_all(&status.mesg).await.is_err() {
-                        break;
-                    }
+                let status = tcpserver::handle_command(string.trim()).await;
+                if socket.write_all(&status.mesg).await.is_err() {
+                    break;
                 }
             }
         }
     }
 }
-
