@@ -13,13 +13,28 @@ use embassy_net::tcp::TcpSocket;
 use embassy_rp::gpio::AnyPin;
 use embassy_time::{Duration, Ticker, Timer};
 
+use cyw43_pio::PioSpi;
+use embassy_net::{ConfigV6, Stack, StackResources};
+use embassy_rp::gpio::Level;
+use embassy_rp::gpio::Output;
+use embassy_rp::peripherals::{DMA_CH0, PIN_23, PIN_25, PIO0};
+
+use dotmatrix::DATA;
+use dotmatrix::DISPLAYS;
+
+use embassy_rp::bind_interrupts;
+use embassy_rp::pio::InterruptHandler;
+
+include!("../credentials.rs");
+
 #[panic_handler]
 fn panic(_: &PanicInfo) -> ! {
     loop {}
 }
 
-use dotmatrix::DATA;
-use dotmatrix::DISPLAYS;
+bind_interrupts!(struct Irqs2 {
+    PIO0_IRQ_0 => InterruptHandler<PIO0>;
+});
 
 async fn clock() {
     if let Some(clock) = DATA.lock().await.clock {
@@ -65,12 +80,6 @@ async fn render_displays() {
     }
 }
 
-use cyw43_pio::PioSpi;
-use embassy_net::{ConfigV6, Stack, StackResources};
-use embassy_rp::gpio::Level;
-use embassy_rp::gpio::Output;
-use embassy_rp::peripherals::{DMA_CH0, PIN_23, PIN_25, PIO0};
-
 #[embassy_executor::task]
 async fn wifi_task(
     runner: cyw43::Runner<
@@ -86,14 +95,6 @@ async fn wifi_task(
 async fn net_task(stack: &'static Stack<cyw43::NetDriver<'static>>) -> ! {
     stack.run().await
 }
-
-use embassy_rp::bind_interrupts;
-use embassy_rp::pio::InterruptHandler;
-bind_interrupts!(struct Irqs2 {
-    PIO0_IRQ_0 => InterruptHandler<PIO0>;
-});
-
-include!("../credentials.rs");
 
 #[embassy_executor::task]
 async fn blinky(mut led: Output<'static, AnyPin>) -> ! {
