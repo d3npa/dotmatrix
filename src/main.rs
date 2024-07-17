@@ -4,13 +4,12 @@
 use core::panic::PanicInfo;
 use core::str;
 
-use cyw43::NetDriver;
+use cyw43::{Control, NetDriver};
 use dotmatrix::graphics;
 use dotmatrix::hal::{DotMatrixLed, Line, ShiftRegister};
 
 use defmt_rtt as _;
 use embassy_executor::Spawner;
-use embassy_net::tcp::TcpSocket;
 use embassy_rp::gpio::AnyPin;
 use embassy_time::{Duration, Ticker, Timer};
 
@@ -196,9 +195,6 @@ async fn main(spawner: Spawner) {
     }
 }
 
-use cyw43::Control;
-use embedded_io_async::Write;
-
 pub async fn init_wifi(
     spawner: &Spawner,
     pwr: Output<'static, PIN_23>,
@@ -299,52 +295,12 @@ pub async fn configure_network(
     pwr: Output<'static, PIN_23>,
     spi: PioSpi<'static, PIN_25, PIO0, 0, DMA_CH0>,
 ) {
-    let (net_dev, mut ctrl) = init_wifi(&spawner, pwr, spi).await;
+    let (net_dev, ctrl) = init_wifi(&spawner, pwr, spi).await;
     let stack = init_ip(&spawner, net_dev).await;
 
     while !stack.is_config_up() {
         Timer::after_millis(100).await;
     }
 
-    let mut rx_buffer = [0; 4096];
-    let mut tx_buffer = [0; 4096];
-    let mut buf = [0; 4096];
-
-    loop {
-        let mut socket = TcpSocket::new(stack, &mut rx_buffer, &mut tx_buffer);
-        socket.set_timeout(Some(Duration::from_secs(10)));
-
-        ctrl.gpio_set(0, false).await;
-
-        if socket.accept(1234).await.is_err() {
-            continue;
-        }
-
-        ctrl.gpio_set(0, true).await;
-
-        if let Err(_e) = socket.write_all(b"[*] welcome~\n").await {
-            break;
-        }
-
-        loop {
-            let n = match socket.read(&mut buf).await {
-                Ok(0) => break, // eof
-                Ok(n) => n,
-                Err(_e) => break,
-            };
-
-            buf[n] = 0;
-
-            if let Ok(string) = dotmatrix::null_term_string(&buf) {
-                if string.is_empty() {
-                    continue;
-                }
-
-                let status = tcpserver::handle_command(string.trim()).await;
-                if socket.write_all(&status.mesg).await.is_err() {
-                    break;
-                }
-            }
-        }
-    }
+    tcpserver::listen(stack, ctrl).await;
 }
