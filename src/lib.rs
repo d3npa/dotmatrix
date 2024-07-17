@@ -12,7 +12,8 @@ use embassy_time::{Duration, Ticker};
 
 pub mod graphics;
 pub mod hal;
-pub mod tcpserver;
+pub mod network;
+pub use network::tcpserver;
 
 // pub mod serialdrv;
 
