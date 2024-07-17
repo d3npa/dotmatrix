@@ -6,13 +6,11 @@ use core::str;
 
 use dotmatrix::graphics;
 use dotmatrix::hal::{DotMatrixLed, Line, ShiftRegister};
-// use dotmatrix::serialdrv;
 
 use defmt_rtt as _;
 use embassy_executor::Spawner;
 use embassy_net::tcp::TcpSocket;
 use embassy_rp::gpio::AnyPin;
-// use embassy_rp::usb::Driver;
 use embassy_time::{Duration, Ticker, Timer};
 
 #[panic_handler]
@@ -20,25 +18,8 @@ fn panic(_: &PanicInfo) -> ! {
     loop {}
 }
 
-// use dotmatrix::serialdrv::USB_DRIVER;
 use dotmatrix::DATA;
 use dotmatrix::DISPLAYS;
-
-// static USB_DRIVER: Mutex<CriticalSectionRawMutex, Option<Driver<USB>>> =
-// Mutex::new(None);
-
-// static LED: Mutex<CriticalSectionRawMutex, Option<Output<'static, AnyPin>>> =
-// Mutex::new(None);
-
-// static DISPLAY: DotMatrixDisplayMutex<ShiftRegisterOutput> =
-//     DotMatrixDisplayMutex::new();
-
-// static DISPLAYS: Displays<ShiftRegisterOutput> = Displays::new();
-
-// used in setting up usb-serial
-// bind_interrupts!(struct Irqs {
-// USBCTRL_IRQ => InterruptHandler<USB>;
-// });
 
 async fn clock() {
     if let Some(clock) = DATA.lock().await.clock {
@@ -184,11 +165,6 @@ async fn main(spawner: Spawner) {
         *(DISPLAYS[3].0.lock().await) = Some(display3);
     }
 
-    // {
-    //     let driver = Driver::new(p.USB, serialdrv::Irqs);
-    //     *(USB_DRIVER.lock().await) = Some(driver);
-    // }
-    // let _ = spawner.spawn(serialdrv::setup_serial());
     let _ = spawner.spawn(render_displays());
     let _ = spawner.spawn(animate());
     let led = Output::new(AnyPin::from(p.PIN_14), Level::Low);
@@ -232,8 +208,6 @@ async fn main(spawner: Spawner) {
 
         use heapless::Vec;
 
-        // let config = Config::dhcpv4(Default::default());
-
         let ipv4_config = StaticConfigV4 {
             address: Ipv4Cidr::new(Ipv4Address::new(192, 168, 1, 5), 24),
             dns_servers: Vec::new(),
@@ -256,10 +230,6 @@ async fn main(spawner: Spawner) {
             dns_servers,
         };
 
-        // let config = embassy_net::Config {
-        // ipv4: ipv4_config,
-        // ipv6: ConfigV6::None,
-        // };
         let mut config = embassy_net::Config::ipv4_static(ipv4_config);
         config.ipv6 = ConfigV6::Static(ipv6_config);
 
