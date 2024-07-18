@@ -54,7 +54,7 @@ pub async fn listen(
 
             buf[n] = 0;
 
-            if let Ok(string) = crate::null_term_string(&buf) {
+            if let Ok(string) = crate::get_null_term_string(&buf) {
                 if string.is_empty() {
                     continue;
                 }
