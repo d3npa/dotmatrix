@@ -4,8 +4,8 @@
 use core::panic::PanicInfo;
 use core::str;
 
-use dotmatrix::graphics;
 use dotmatrix::hal::{DotMatrixLed, Line, ShiftRegister};
+use dotmatrix::{graphics, tcpserver};
 
 use defmt_rtt as _;
 use embassy_executor::Spawner;
@@ -14,25 +14,21 @@ use embassy_time::{Duration, Ticker, Timer};
 
 use cyw43_pio::PioSpi;
 use embassy_rp::gpio::Output;
-use embassy_rp::peripherals::PIO0;
-
 use embassy_rp::pio::Pio;
 
-use dotmatrix::network::configure_network;
 use dotmatrix::DATA;
 use dotmatrix::DISPLAYS;
 
-use embassy_rp::bind_interrupts;
-use embassy_rp::pio::InterruptHandler;
+use embassy_net::{Ipv4Address, Ipv4Cidr, StaticConfigV4};
+use heapless::Vec;
+use pico_wifi::{configure_network, WifiConfiguration};
+
+include!("../credentials.rs");
 
 #[panic_handler]
 fn panic(_: &PanicInfo) -> ! {
     loop {}
 }
-
-bind_interrupts!(struct Irqs2 {
-    PIO0_IRQ_0 => InterruptHandler<PIO0>;
-});
 
 async fn clock() {
     if let Some(clock) = DATA.lock().await.clock {
@@ -158,7 +154,7 @@ async fn main(spawner: Spawner) {
 
         let pwr = Output::new(p.PIN_23, Level::Low);
         let cs = Output::new(p.PIN_25, Level::High);
-        let mut pio = Pio::new(p.PIO0, Irqs2);
+        let mut pio = Pio::new(p.PIO0, pico_wifi::Irqs);
         let spi = PioSpi::new(
             &mut pio.common,
             pio.sm0,
@@ -169,6 +165,20 @@ async fn main(spawner: Spawner) {
             p.DMA_CH0,
         );
 
-        configure_network(&spawner, pwr, spi).await;
+        let wifi_config = WifiConfiguration {
+            wifi_ssid: WIFI_NETWORK,
+            wifi_password: Some(WIFI_PASSWORD),
+            ipv4: Some(StaticConfigV4 {
+                address: Ipv4Cidr::new(Ipv4Address::new(192, 168, 1, 5), 24),
+                gateway: Some(Ipv4Address::new(192, 168, 0, 1)),
+                dns_servers: Vec::new(),
+            }),
+            ipv6: None,
+        };
+
+        let (ctrl, stack) =
+            configure_network(&spawner, pwr, spi, wifi_config).await;
+
+        tcpserver::listen(stack, ctrl).await;
     }
 }

@@ -371,6 +371,7 @@ dependencies = [
  "embassy-time",
  "embedded-io-async",
  "heapless 0.8.0",
+ "pico-wifi",
  "portable-atomic",
  "static_cell",
 ]
@@ -1121,6 +1122,27 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6796ad771acdc0123d2a88dc428b5e38ef24456743ddb1744ed628f9815c096"
 dependencies = [
  "siphasher",
+]
+
+[[package]]
+name = "pico-wifi"
+version = "0.1.0"
+source = "git+https://github.com/d3npa/pico-wifi#5d1fd134d487fb9c2544620a4e1e042f3b4202ee"
+dependencies = [
+ "cortex-m-rt",
+ "cyw43",
+ "cyw43-pio",
+ "defmt-rtt",
+ "embassy-embedded-hal",
+ "embassy-executor",
+ "embassy-futures",
+ "embassy-net",
+ "embassy-rp",
+ "embassy-sync 0.5.0",
+ "embassy-time",
+ "embedded-io-async",
+ "portable-atomic",
+ "static_cell",
 ]
 
 [[package]]
